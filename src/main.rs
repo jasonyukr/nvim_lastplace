@@ -148,9 +148,9 @@ fn main() {
                 }
             }
 
-            if field_n == 34 {
+            if field_n == 34 && field_f.len() > 0 && field_f[0] == b'/' {
                 match str::from_utf8(&field_f) {
-                    Ok(v) => println!("{}\t{}", field_l, v),
+                    Ok(v) => println!("{}\t{}", v, field_l),
                     Err(_) => panic!("utf8 convert fail"),
                 }
             }
@@ -159,6 +159,6 @@ fn main() {
         }
     }
 
-    let after = reader.stream_position().unwrap();
-    println!("finally ... {}", after);
+    // let after = reader.stream_position().unwrap();
+    // println!("finally ... {}", after);
 }
