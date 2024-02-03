@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
 use std::str;
+use std::env;
 
 fn read_uint<R: BufRead>(reader: &mut R) -> (usize, usize) {
     let mut len = [0u8];
@@ -8,24 +9,21 @@ fn read_uint<R: BufRead>(reader: &mut R) -> (usize, usize) {
     let mut len4 = [0u8; 4];
     let length : usize;
 
-    match reader.read_exact(&mut len) {
-        Ok(()) => {},
-        Err(_) => { panic!("read_uint fail") },
-    }
+    reader.read_exact(&mut len).expect("len");
     match len[0] {
         0xCC => {
-            reader.read_exact(&mut len).unwrap();
+            reader.read_exact(&mut len).expect("len_");
             length = len[0] as usize;
             return (length, 2);
         },
         0xCD => {
-            reader.read_exact(&mut len2).unwrap();
+            reader.read_exact(&mut len2).expect("len2");
             length = ((len2[0] as usize) << 8) +
                 (len2[1] as usize);
             return (length, 3);
         },
         0xCE => {
-            reader.read_exact(&mut len4).unwrap();
+            reader.read_exact(&mut len4).expect("len4");
             length = ((len4[0] as usize) << 24) +
                 ((len4[1] as usize) << 16) +
                 ((len4[2] as usize) << 8) +
@@ -52,7 +50,16 @@ fn read_uint<R: BufRead>(reader: &mut R) -> (usize, usize) {
 }
 
 fn main() {
-    let file = File::open("/home/jinhyu/.local/state/nvim/shada/main.shada").unwrap();
+    let file: File;
+    if let Some(path) = env::home_dir() {
+        let filename = format!("{}/{}", path.display(), ".local/state/nvim/shada/main.shada");
+        file = match File::open(filename) {
+            Err(_) => panic!("can't open file"),
+            Ok(file) => file,
+        };
+    } else {
+        panic!("can't get home_dir");
+    }
     let mut reader = BufReader::new(file);
 
     loop {
@@ -67,12 +74,9 @@ fn main() {
 
         match reader.read_exact(&mut entry_type) {
             Ok(()) => {},
-            Err(_) => { break }, // we expect EOF here
+            Err(_) => break, // we expect EOF here
         }
-        match reader.read_exact(&mut timestamp) {
-            Ok(()) => {},
-            Err(_) => { panic!("no timestamp") },
-        }
+        reader.read_exact(&mut timestamp).expect("timestamp");
         (total_length, _) = read_uint(&mut reader);
 
         if entry_type[1] == 0xCE && entry_type[0] == 0x0A { // LocalMark
@@ -92,10 +96,7 @@ fn main() {
                                        |shada-compatibility|.
                -----------------------------------------------------
             */
-            match reader.read_exact(&mut tag) {
-                Ok(()) => {},
-                Err(_) => { panic!("no tag") },
-            }
+            reader.read_exact(&mut tag).expect("tag");
             processed = tag.len();
 
             // println!("LocalMark total_length={}", total_length);
@@ -105,10 +106,10 @@ fn main() {
             let mut field_f = vec![0_0u8; 0];
 
             while processed < total_length {
-                reader.read_exact(&mut tag).unwrap();
+                reader.read_exact(&mut tag).expect("tag");
                 processed = processed + tag.len();
 
-                reader.read_exact(&mut key).unwrap();
+                reader.read_exact(&mut key).expect("key");
                 processed = processed + key.len();
 
                 match key[0] as char {
@@ -127,17 +128,14 @@ fn main() {
                         field_n = length;
                     },
                     'f' => {
-                        reader.read_exact(&mut tag).unwrap();
+                        reader.read_exact(&mut tag).expect("f.tag");
                         processed = processed + tag.len();
 
                         (length, consumed) = read_uint(&mut reader);
                         processed = processed + consumed;
 
                         let mut filename = vec![0_0u8; length];
-                        match reader.read_exact(&mut filename) {
-                            Ok(()) => {},
-                            Err(_) => { panic!("no filenam") },
-                        }
+                        reader.read_exact(&mut filename).expect("filename");
                         processed = processed + length;
 
                         field_f = filename.clone();
@@ -155,10 +153,7 @@ fn main() {
                 }
             }
         } else {
-            reader.seek_relative(total_length as i64).unwrap();
+            reader.seek_relative(total_length as i64).expect("seek");
         }
     }
-
-    // let after = reader.stream_position().unwrap();
-    // println!("finally ... {}", after);
 }
