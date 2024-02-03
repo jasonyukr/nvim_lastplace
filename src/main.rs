@@ -2,28 +2,46 @@ use std::fs::File;
 use std::io::{prelude::*, BufReader};
 use std::str;
 use std::env;
+use std::io::{Read, Result};
+
+const DEBUG: bool = false;
+
+fn read_fully<R: Read>(reader: &mut R, buf: &mut [u8]) -> Result<()> {
+    let mut bytes_read = 0;
+
+    while bytes_read < buf.len() {
+        match reader.read(&mut buf[bytes_read..]) {
+            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            Ok(n) => bytes_read += n,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok(())
+}
 
 fn read_uint<R: BufRead>(reader: &mut R) -> (usize, usize) {
     let mut len = [0u8];
+    let mut len1 = [0u8];
     let mut len2 = [0u8; 2];
     let mut len4 = [0u8; 4];
     let length : usize;
 
-    reader.read_exact(&mut len).expect("len");
+    read_fully(reader, &mut len).expect("len");
     match len[0] {
         0xCC => {
-            reader.read_exact(&mut len).expect("len_");
-            length = len[0] as usize;
+            read_fully(reader, &mut len1).expect("len_");
+            length = len1[0] as usize;
             return (length, 2);
         },
         0xCD => {
-            reader.read_exact(&mut len2).expect("len2");
+            read_fully(reader, &mut len2).expect("len2");
             length = ((len2[0] as usize) << 8) +
                 (len2[1] as usize);
             return (length, 3);
         },
         0xCE => {
-            reader.read_exact(&mut len4).expect("len4");
+            read_fully(reader, &mut len4).expect("len4");
             length = ((len4[0] as usize) << 24) +
                 ((len4[1] as usize) << 16) +
                 ((len4[2] as usize) << 8) +
@@ -41,7 +59,7 @@ fn read_uint<R: BufRead>(reader: &mut R) -> (usize, usize) {
         },
         _ => {
             length = len[0] as usize;
-            if length >= 0xE0 {
+            if length > 0xE0 {
                 panic!("signed int case");
             }
             return (length, 1);
@@ -66,6 +84,7 @@ fn main() {
     }
     let mut reader = BufReader::new(file);
 
+    let mut cnt = 1;
     loop {
         let mut entry_type = [0u8; 2];
         let mut timestamp = [0u8; 4];
@@ -76,14 +95,23 @@ fn main() {
         let mut consumed;
         let mut processed : usize;
 
-        match reader.read_exact(&mut entry_type) {
+        match read_fully(&mut reader, &mut entry_type) {
             Ok(()) => {},
             Err(_) => break, // we expect EOF here
         }
-        reader.read_exact(&mut timestamp).expect("timestamp");
-        (total_length, _) = read_uint(&mut reader);
+
+        if DEBUG {
+            cnt = cnt + 1;
+            println!("iter={} entry_type={:#02x}{:#02x}", cnt, entry_type[0], entry_type[1]);
+        }
 
         if entry_type[1] == 0xCE && entry_type[0] == 0x0A { // LocalMark
+            read_fully(&mut reader, &mut timestamp).expect("timestamp");
+            (total_length, _) = read_uint(&mut reader);
+            if DEBUG {
+                println!("0x0ACE length={}", total_length);
+            }
+
             /*
                -----------------------------------------------------
                Data contained in the map:
@@ -100,20 +128,18 @@ fn main() {
                                        |shada-compatibility|.
                -----------------------------------------------------
             */
-            reader.read_exact(&mut tag).expect("tag");
+            read_fully(&mut reader, &mut tag).expect("tag");
             processed = tag.len();
-
-            // println!("LocalMark total_length={}", total_length);
 
             let mut field_l = 1;
             let mut field_n = 34; // "
             let mut field_f = vec![0_0u8; 0];
 
             while processed < total_length {
-                reader.read_exact(&mut tag).expect("tag");
+                read_fully(&mut reader, &mut tag).expect("tag");
                 processed = processed + tag.len();
 
-                reader.read_exact(&mut key).expect("key");
+                read_fully(&mut reader, &mut key).expect("key");
                 processed = processed + key.len();
 
                 match key[0] as char {
@@ -132,14 +158,14 @@ fn main() {
                         field_n = length;
                     },
                     'f' => {
-                        reader.read_exact(&mut tag).expect("f.tag");
+                        read_fully(&mut reader, &mut tag).expect("f.tag");
                         processed = processed + tag.len();
 
                         (length, consumed) = read_uint(&mut reader);
                         processed = processed + consumed;
 
                         let mut filename = vec![0_0u8; length];
-                        reader.read_exact(&mut filename).expect("filename");
+                        read_fully(&mut reader, &mut filename).expect("filename");
                         processed = processed + length;
 
                         field_f = filename.clone();
@@ -156,7 +182,36 @@ fn main() {
                     Err(_) => panic!("utf8 convert fail"),
                 }
             }
+/*
+        } else if entry_type[1] == 0xCE && entry_type[0] == 0x02 { // SearchPattern
+            // I found this case from actual shada data. I need to jump 6 more bytes.
+            read_fully(&mut reader, &mut timestamp).expect("timestamp");
+            (total_length, _) = read_uint(&mut reader);
+            if DEBUG {
+                println!("0x02CE length={}", total_length);
+            }
+            reader.seek_relative((total_length + 6) as i64).expect("seek");
+*/
+        } else if entry_type[1] == 0x00 {
+            if entry_type[0] > 11 {
+                panic!("unexpected type: entry_type={:x?}", entry_type);
+            }
+            // I found this case (0x0A,0x00) from actual shada data. There's no timestamp.
+            // I presume that non-0xCE value (like 0x00) means timestamp skip
+            (total_length, _) = read_uint(&mut reader);
+            if DEBUG {
+                println!("0x??00 length={}", total_length);
+            }
+            reader.seek_relative(total_length as i64).expect("seek");
         } else {
+            read_fully(&mut reader, &mut timestamp).expect("timestamp");
+            if entry_type[0] > 11 {
+                panic!("unexpected type: entry_type={:x?} timestamp={:x?}", entry_type, timestamp);
+            }
+            (total_length, _) = read_uint(&mut reader);
+            if DEBUG {
+                println!("0x???? length={}", total_length);
+            }
             reader.seek_relative(total_length as i64).expect("seek");
         }
     }
