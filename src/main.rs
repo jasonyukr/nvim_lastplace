@@ -50,9 +50,13 @@ fn read_uint<R: BufRead>(reader: &mut R) -> (usize, usize) {
 }
 
 fn main() {
+    let args: Vec<_> = env::args().collect();
     let file: File;
     if let Some(path) = env::home_dir() {
-        let filename = format!("{}/{}", path.display(), ".local/state/nvim/shada/main.shada");
+        let mut filename = format!("{}/{}", path.display(), ".local/state/nvim/shada/main.shada");
+        if args.len() == 2 {
+            filename = args[1].clone();
+        }
         file = match File::open(filename) {
             Err(_) => panic!("can't open file"),
             Ok(file) => file,
